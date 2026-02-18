@@ -8,7 +8,9 @@ llm = None
 
 def load_model():
     global llm
-    llm = Llama(model_path=model_path)
+    custom_template = "{{ bos_token }}\n{%- for message in messages -%}\n{{ message['content'] | trim }}\n{%- endfor -%}"
+    llm = Llama(model_path=model_path, chat_template=custom_template)
+
 
 t = threading.Thread(target=load_model)
 t.start()
