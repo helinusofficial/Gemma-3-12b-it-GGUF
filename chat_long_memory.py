@@ -1,31 +1,46 @@
-# chat_long_memory.py
+import threading
+import time
 from llama_cpp import Llama
 
-# Load the model
+print("Starting model load...", flush=True)
 model_path = "Model/gemma-3-12b-it-Q8_0.gguf"
-llm = Llama(model_path=model_path)
+llm = None
 
-print("Gemma 12B Q8 with long-term memory is ready! Type 'exit' or 'quit' to stop.")
+def load_model():
+    global llm
+    llm = Llama(model_path=model_path)
 
-chat_history = []  # full conversation history
-MAX_HISTORY = 6  # recent messages to include directly
-SUMMARY_THRESHOLD = 12  # number of messages before we summarize
-conversation_summary = ""  # running summary of older messages
+t = threading.Thread(target=load_model)
+t.start()
 
+while t.is_alive():
+    print("Model is loading...", end="\r")
+    time.sleep(1)
 
-def summarize_history(messages, existing_summary=""):
-    """
-    Summarize a list of messages with optional existing summary.
-    """
-    if existing_summary:
-        prompt = f"Update this conversation summary based on new messages.\nCurrent summary: {existing_summary}\n\nNew messages:\n"
-    else:
-        prompt = "Summarize the following conversation briefly:\n\n"
+print("\nGemma 12B Q8 with long-term memory is ready! Type 'exit' or 'quit' to stop.")
 
-    prompt += "\n".join(messages) + "\n\nUpdated summary:"
-    response = llm(prompt=prompt, max_tokens=150)
-    return response["choices"][0]["text"].strip()
+chat_history = []
+MAX_HISTORY = 6
+SUMMARY_THRESHOLD = 12
+conversation_summary = ""
 
+def summarize_history_async(messages, existing_summary="", callback=None):
+    def worker():
+        nonlocal existing_summary
+        if existing_summary:
+            prompt = f"Update this conversation summary based on new messages.\nCurrent summary: {existing_summary}\n\nNew messages:\n"
+        else:
+            prompt = "Summarize the following conversation briefly:\n\n"
+        prompt += "\n".join(messages) + "\n\nUpdated summary:"
+        response = llm(prompt=prompt, max_tokens=150)
+        updated_summary = response["choices"][0]["text"].strip()
+        if callback:
+            callback(updated_summary)
+    threading.Thread(target=worker, daemon=True).start()
+
+def update_summary(new_summary):
+    global conversation_summary
+    conversation_summary = new_summary
 
 while True:
     user_input = input("\nYou: ")
@@ -35,15 +50,12 @@ while True:
 
     chat_history.append(f"You: {user_input}")
 
-    # Summarize older messages if exceeding threshold
     if len(chat_history) > SUMMARY_THRESHOLD:
         old_messages = chat_history[:-MAX_HISTORY]
-        conversation_summary = summarize_history(old_messages, conversation_summary)
+        summarize_history_async(old_messages, conversation_summary, callback=update_summary)
         chat_history = [f"[Summary of earlier conversation: {conversation_summary}]"] + chat_history[-MAX_HISTORY:]
 
-    # Build prompt
     prompt = "\n".join(chat_history) + "\nGemma:"
-
     response = llm(
         prompt=prompt,
         max_tokens=200,
@@ -52,5 +64,4 @@ while True:
 
     generated_text = response["choices"][0]["text"].strip()
     print(f"Gemma: {generated_text}")
-
     chat_history.append(f"Gemma: {generated_text}")
