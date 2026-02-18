@@ -8,8 +8,12 @@ llm = None
 
 def load_model():
     global llm
-    custom_template = "{{ bos_token }}\n{%- for message in messages -%}\n{{ message['content'] | trim }}\n{%- endfor -%}"
-    llm = Llama(model_path=model_path, chat_template=custom_template)
+    llm = Llama(
+        model_path=model_path,
+        n_threads=4,
+        n_ctx=2048,
+        n_batch=16
+    )
 
 
 t = threading.Thread(target=load_model)
@@ -79,23 +83,31 @@ chat_history = []
 important_memory = []
 MAX_HISTORY = 8
 
+
 def build_prompt(user_input):
-    prompt = f"{system_prompt}\n"
+    messages = [
+        {"role": "system", "content": system_prompt}
+    ]
 
     if important_memory:
-        prompt += "[Important user facts:]\n"
-        for mem in important_memory[-10:]:
-            prompt += f"- {mem}\n"
+        memory_context = "Important user facts:\n" + "\n".join(f"- {m}" for m in important_memory[-10:])
+        messages.append({"role": "system", "content": memory_context})
 
     for msg in chat_history[-MAX_HISTORY:]:
-        role, text = msg.split(": ", 1)
-        if role == "You":
-            prompt += f"User: {text}\n"
-        else:
-            prompt += f"Assistant: {text}\n"
+        if ": " in msg:
+            role_part, text_part = msg.split(": ", 1)
+            role = "user" if role_part == "You" else "assistant"
+            messages.append({"role": role, "content": text_part})
 
-    prompt += f"User: {user_input}\nAssistant:"
-    return prompt
+    messages.append({"role": "user", "content": user_input})
+
+    return llm.create_chat_completion(
+        messages=messages,
+        max_tokens=300,
+        temperature=temperature,
+        top_p=top_p,
+        stream=True
+    )
 
 def extract_important_info(text):
     keywords = ["my name is", "i am", "i work", "my project", "remember that"]
@@ -130,35 +142,23 @@ def auto_adjust_prompt(user_input):
 
 while True:
     user_input = input("\nYou: ")
-
-    if user_input.lower() == "exit":
-        print("Goodbye!")
-        break
+    if user_input.lower() == "exit": break
 
     extract_important_info(user_input)
     auto_adjust_prompt(user_input)
 
-    prompt = build_prompt(user_input)
-
     print("Gemma: ", end="", flush=True)
 
-    response = llm(
-        prompt=prompt,
-        max_tokens=300,
-        temperature=temperature,
-        top_p=top_p,
-        stop=["User:"],
-        stream=True
-    )
+    response_stream = build_prompt(user_input)
 
     full_response = ""
-
-    for chunk in response:
-        token = chunk["choices"][0]["text"]
-        print(token, end="", flush=True)
-        full_response += token
+    for chunk in response_stream:
+        if "choices" in chunk and len(chunk["choices"]) > 0:
+            delta = chunk["choices"][0].get("delta", {})
+            token = delta.get("content", "")
+            print(token, end="", flush=True)
+            full_response += token
 
     print()
-
     chat_history.append(f"You: {user_input}")
     chat_history.append(f"Gemma: {full_response.strip()}")
